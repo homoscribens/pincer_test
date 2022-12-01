@@ -41,26 +41,27 @@ def torch_fix_seed(seed=42):
 def load_dataset(tokenizer, task, data_dir):
     logger.info('Loading dataset...')
     if data_dir.exists():
+        logger.info(f'Loading cached dataset from {data_dir}')
         train_dataset = datasets.load_from_disk(data_dir / 'train')
         val_dataset = datasets.load_from_disk(data_dir / 'val')
         test_dataset = datasets.load_from_disk(data_dir / 'test')
     else:
         if task =='SA':
-            ds = datasets.load_dataset('imdb', split='train')
-            ds = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
-            test_dataset = datasets.load_dataset('imdb', split='test')
+            dataset = datasets.load_dataset('glue', 'sst2', split='train')
+            dataset = dataset.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
+            val_dataset = datasets.load_dataset('glue', 'sst2', split='validation')
 
             def tokenize(examples):
-                encoded = tokenizer(examples['text'], 
+                encoded = tokenizer(examples['sentence'], 
                                     truncation=True,
-                                    padding="max_length", 
+                                    padding=True, 
                                     return_tensors='pt')
                 return encoded
 
-            ds = ds.map(tokenize, batched=True)
-            train_dataset = ds['train']
-            val_dataset = ds['test']
-            test_dataset = test_dataset.map(tokenize, batched=True)
+            dataset = dataset.map(tokenize, batched=True, batch_size=None)
+            train_dataset = dataset['train']
+            test_dataset = dataset['test']
+            val_dataset = val_dataset.map(tokenize, batched=True, batch_size=None)
         elif task == 'NLI':
             ds = datasets.load_dataset('snli', split='train')
             ds = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
@@ -70,14 +71,14 @@ def load_dataset(tokenizer, task, data_dir):
                 encoded = tokenizer(examples['premise'], 
                                     examples['hypothesis'],
                                     truncation=True,
-                                    padding="max_length", 
+                                    padding=True, 
                                     return_tensors='pt')
                 return encoded
 
-            ds = ds.map(tokenize, batched=True)
+            ds = ds.map(tokenize, batched=True, batch_size=None)
             train_dataset = ds['train']
             val_dataset = ds['test']
-            test_dataset = test_dataset.map(tokenize, batched=True)
+            test_dataset = test_dataset.map(tokenize, batched=True, batch_size=None)
         else:
             raise ValueError('Task not supported')
 
@@ -89,6 +90,7 @@ def load_dataset(tokenizer, task, data_dir):
         val_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
         test_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
 
+        logger.info(f'Saving dataset to {data_dir}')
         data_dir.mkdir(parents=True)
         train_dataset.save_to_disk(data_dir / 'train')
         val_dataset.save_to_disk(data_dir / 'val')
@@ -98,7 +100,9 @@ def load_dataset(tokenizer, task, data_dir):
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=52, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=52, pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=52, pin_memory=True)
-    return train_loader, val_loader, test_loader
+
+    num_labels = len(train_dataset.features['label'].names)
+    return train_loader, val_loader, test_loader, num_labels
 
 def calculate_loss_and_accuracy(model, loader, device='cuda'):
     model.eval()
@@ -158,12 +162,13 @@ def train_model(model, train_loader, val_loader, optimizer, num_epochs, output_d
             f.write(model_to_save.config.to_json_string())
 
 def main(args):
-    logger.info('Loading Tokenizer and Model...')
+    logger.info('Loading Tokenizer...')
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_name)
-    model = model.to(args.device)
+    train_loader, val_loader, test_loader, num_labels = load_dataset(tokenizer, args.task, args.data_dir)
 
-    train_loader, val_loader, test_loader = load_dataset(tokenizer, args.task, args.data_dir)
+    logger.info('Loading Model...')
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=num_labels)
+    model = model.to(args.device)
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=args.lr)
 
@@ -171,7 +176,7 @@ def main(args):
 
     logger.info('Evaluating model...')
     trained_model_path = args.output_dir / args.task / f'epoch={0}'
-    trained_model = AutoModelForSequenceClassification.from_pretrained(trained_model_path)
+    trained_model = AutoModelForSequenceClassification.from_pretrained(trained_model_path, num_labels=num_labels)
     trained_model = trained_model.to(args.device)
     _, f1_test = calculate_loss_and_accuracy(trained_model, test_loader, device=args.device)
     logger.info(f'f1_test: {f1_test}')
