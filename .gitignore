@@ -1,3 +1,5 @@
 /wandb/
 /output/
+/lightning_logs/
+/data/
 __pycache__/
