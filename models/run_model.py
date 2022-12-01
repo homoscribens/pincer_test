@@ -1,3 +1,4 @@
+import os
 import pathlib
 import argparse
 import logging
@@ -16,10 +17,15 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from tqdm import tqdm
 
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 logging.basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
                     datefmt='%Y/%d/%m %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+CONFIG_NAME = 'config.json'
+WEIGHTS_NAME = 'pytorch_model.bin'
 
 def torch_fix_seed(seed=42):
     # Python random
@@ -32,51 +38,61 @@ def torch_fix_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.use_deterministic_algorithms = True
 
-def load_dataset(tokenizer, task):
+def load_dataset(tokenizer, task, data_dir):
     logger.info('Loading dataset...')
-    if task =='SA':
-        ds = datasets.load_dataset('imdb', split='train')
-        ds = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
-        test_dataset = datasets.load_dataset('imdb', split='test')
-
-        def tokenize(examples):
-            encoded = tokenizer(examples['text'], 
-                                truncation=True,
-                                padding="max_length", 
-                                return_tensors='pt')
-            return encoded
-
-        ds = ds.map(tokenize, batched=True)
-        train_dataset = ds['train']
-        val_dataset = ds['test']
-        test_dataset = test_dataset.map(tokenize, batched=True)
-    elif task == 'NLI':
-        ds = datasets.load_dataset('snli', split='train')
-        ds = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
-        test_dataset = datasets.load_dataset('snli', split='test')
-
-        def tokenize(examples):
-            encoded = tokenizer(examples['premise'], 
-                                examples['hypothesis'],
-                                truncation=True,
-                                padding="max_length", 
-                                return_tensors='pt')
-            return encoded
-
-        ds = ds.map(tokenize, batched=True)
-        train_dataset = ds['train']
-        val_dataset = ds['test']
-        test_dataset = test_dataset.map(tokenize, batched=True)
+    if data_dir.exists():
+        train_dataset = datasets.load_from_disk(data_dir / 'train')
+        val_dataset = datasets.load_from_disk(data_dir / 'val')
+        test_dataset = datasets.load_from_disk(data_dir / 'test')
     else:
-        raise ValueError('Task not supported')
+        if task =='SA':
+            ds = datasets.load_dataset('imdb', split='train')
+            ds = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
+            test_dataset = datasets.load_dataset('imdb', split='test')
 
-    train_dataset = train_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
-    val_dataset = val_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
-    test_dataset = test_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
+            def tokenize(examples):
+                encoded = tokenizer(examples['text'], 
+                                    truncation=True,
+                                    padding="max_length", 
+                                    return_tensors='pt')
+                return encoded
 
-    train_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
-    val_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
-    test_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
+            ds = ds.map(tokenize, batched=True)
+            train_dataset = ds['train']
+            val_dataset = ds['test']
+            test_dataset = test_dataset.map(tokenize, batched=True)
+        elif task == 'NLI':
+            ds = datasets.load_dataset('snli', split='train')
+            ds = ds.train_test_split(test_size=0.2, stratify_by_column='label', seed=42)
+            test_dataset = datasets.load_dataset('snli', split='test')
+
+            def tokenize(examples):
+                encoded = tokenizer(examples['premise'], 
+                                    examples['hypothesis'],
+                                    truncation=True,
+                                    padding="max_length", 
+                                    return_tensors='pt')
+                return encoded
+
+            ds = ds.map(tokenize, batched=True)
+            train_dataset = ds['train']
+            val_dataset = ds['test']
+            test_dataset = test_dataset.map(tokenize, batched=True)
+        else:
+            raise ValueError('Task not supported')
+
+        train_dataset = train_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
+        val_dataset = val_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
+        test_dataset = test_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
+
+        train_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
+        val_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
+        test_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
+
+        data_dir.mkdir(parents=True)
+        train_dataset.save_to_disk(data_dir / 'train')
+        val_dataset.save_to_disk(data_dir / 'val')
+        test_dataset.save_to_disk(data_dir / 'test')
 
     logger.info('Creating Dataloaders...')
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=52, pin_memory=True)
@@ -84,7 +100,7 @@ def load_dataset(tokenizer, task):
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, num_workers=52, pin_memory=True)
     return train_loader, val_loader, test_loader
 
-def calculate_loss_and_accuracy(model, loader, device):
+def calculate_loss_and_accuracy(model, loader, device='cuda'):
     model.eval()
     valid_loss = []
     score = []
@@ -97,13 +113,13 @@ def calculate_loss_and_accuracy(model, loader, device):
             loss = outputs.loss.detach().cpu().numpy()
             valid_loss.append(loss)
             
-            pred = torch.argmax(outputs.logits, dim=-1).cpu().numpy()
-            labels = labels.detach().cpu().numpy()
+            pred = torch.argmax(outputs.logits, dim=-1).detach().cpu().numpy()
+            labels = batch.pop('labels').detach().cpu().numpy()
             score.append(f1_score(labels, pred))
             
     return np.mean(valid_loss), np.mean(score)
 
-def train_model(model, train_loader, val_loader, optimizer, num_epochs, device='cuda'):
+def train_model(model, train_loader, val_loader, optimizer, num_epochs, output_dir, task, device='cuda'):
     logger.info(f'TRAINING MODEL num_epoch: {num_epochs}')
     for epoch in range(num_epochs):
         logger.info(f'Epoch {epoch}')
@@ -127,19 +143,38 @@ def train_model(model, train_loader, val_loader, optimizer, num_epochs, device='
         logger.info(f'epoch: {epoch + 1}, loss_train: {loss_train:.4f}, loss_valid: {loss_valid}, f1_valid: {f1_valid}') 
 
         logger.info('Saving model...')
-        torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, f'checkpoint_epoch={epoch + 1}.pt')
+        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+
+        epoch_output_dir = output_dir / task / f"epoch={epoch}"
+        if not epoch_output_dir.exists():
+            epoch_output_dir.mkdir(parents=True)
+
+        # torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, f'checkpoint_epoch={epoch + 1}.pt')
+
+        output_model_file = str(epoch_output_dir / WEIGHTS_NAME)
+        output_config_file = str(epoch_output_dir / CONFIG_NAME)
+        torch.save(model_to_save.state_dict(), output_model_file)
+        with open(output_config_file, 'w') as f:
+            f.write(model_to_save.config.to_json_string())
 
 def main(args):
     logger.info('Loading Tokenizer and Model...')
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name)
     model = model.to(args.device)
 
-    train_loader, val_loader, test_loader = load_dataset(tokenizer, args.task)
+    train_loader, val_loader, test_loader = load_dataset(tokenizer, args.task, args.data_dir)
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=args.lr)
 
-    train_model(model, train_loader, val_loader, optimizer, args.epochs, device=args.device)
+    train_model(model, train_loader, val_loader, optimizer, num_epochs=args.epochs, output_dir=args.output_dir, task=args.task, device=args.device)
+
+    logger.info('Evaluating model...')
+    trained_model_path = args.output_dir / args.task / f'epoch={0}'
+    trained_model = AutoModelForSequenceClassification.from_pretrained(trained_model_path)
+    trained_model = trained_model.to(args.device)
+    _, f1_test = calculate_loss_and_accuracy(trained_model, test_loader, device=args.device)
+    logger.info(f'f1_test: {f1_test}')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -155,9 +190,10 @@ if __name__ == '__main__':
 
     BASE_DIR = pathlib.Path(__file__).parent.parent.absolute()
     output_dir = BASE_DIR / 'output'
-    if not output_dir.exists():
-        output_dir.mkdir()
-    args.output_dir = str(output_dir)
+    args.output_dir = output_dir
+
+    data_dir = BASE_DIR / 'data' / args.task
+    args.data_dir = data_dir
 
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
