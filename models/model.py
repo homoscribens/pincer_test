@@ -4,7 +4,7 @@ from transformers import AutoModelForSequenceClassification
 
 import pytorch_lightning as pl
 
-class SentimentClassifier(pl.LightningModule):
+class Classifier(pl.LightningModule):
     def __init__(self, model_name, lr=1e-5):
         super().__init__()
 
