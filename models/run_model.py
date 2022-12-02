@@ -16,6 +16,8 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from tqdm import tqdm
 
+from model import BertClassifier
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -124,7 +126,7 @@ def calculate_loss_and_accuracy(model, loader, device='cuda'):
     return np.mean(valid_loss), np.mean(score)
 
 def train_model(model, train_loader, val_loader, optimizer, num_epochs, output_dir, task, device='cuda'):
-    logger.info(f'TRAINING MODEL num_epoch: {num_epochs}')
+    logger.info(f'TRAINING MODEL num_epoch: {num_epochs}, task: {task}')
     for epoch in range(num_epochs):
         logger.info(f'Epoch {epoch}')
 
@@ -167,16 +169,16 @@ def main(args):
     train_loader, val_loader, test_loader, num_labels = load_dataset(tokenizer, args.task, args.data_dir)
 
     logger.info('Loading Model...')
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=num_labels)
+    model = BertClassifier.from_pretrained(args.model_name, num_labels=num_labels)
     model = model.to(args.device)
 
     optimizer = torch.optim.AdamW(params=model.parameters(), lr=args.lr)
 
-    train_model(model, train_loader, val_loader, optimizer, num_epochs=args.epochs, output_dir=args.output_dir, task=args.task, device=args.device)
+    # train_model(model, train_loader, val_loader, optimizer, num_epochs=args.epochs, output_dir=args.output_dir, task=args.task, device=args.device)
 
     logger.info('Evaluating model...')
-    trained_model_path = args.output_dir / args.task / f'epoch={0}'
-    trained_model = AutoModelForSequenceClassification.from_pretrained(trained_model_path, num_labels=num_labels)
+    trained_model_path = args.output_dir / args.task / f'epoch={4}'
+    trained_model = BertClassifier.from_pretrained(trained_model_path, num_labels=num_labels)
     trained_model = trained_model.to(args.device)
     _, f1_test = calculate_loss_and_accuracy(trained_model, test_loader, device=args.device)
     logger.info(f'f1_test: {f1_test}')
