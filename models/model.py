@@ -1,34 +1,43 @@
+from dataclasses import dataclass
+
 import torch
+import torch.nn as nn
+from torch.nn import CrossEntropyLoss
 
-from transformers import AutoModelForSequenceClassification
+from transformers import BertPreTrainedModel, BertModel, BertConfig
+from transformers.utils import ModelOutput
 
-import pytorch_lightning as pl
 
-class Classifier(pl.LightningModule):
-    def __init__(self, model_name, lr=1e-5):
-        super().__init__()
+@dataclass
+class Output(ModelOutput):
+    loss: torch.FloatTensor = None
+    logits: torch.FloatTensor = None
 
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
-        self.lr = lr
+class BertClassifier(BertPreTrainedModel):
+    def __init__(self, config=BertConfig):
+        super(BertClassifier, self).__init__(config)
+        self.num_labels = config.num_labels
+        self.bert = BertModel(config)
+        classifier_dropout = (
+            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+        )
+        self.dropout = nn.Dropout(classifier_dropout)
+        self.classifier = nn.Linear(self.bert.config.hidden_size, config.num_labels)
 
-        self.save_hyperparameters()
+        self.post_init()
 
-    def training_step(self, batch, batch_idx):
-        outputs = self.model(**batch)
-        loss = outputs.loss
-        self.log("train_loss", loss)
-        return loss
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None, every_loss=False):
+        outputs = self.bert(input_ids, token_type_ids, attention_mask)
+        pooled_output = outputs.pooler_output
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
 
-    def validation_step(self, batch, batch_idx):
-        outputs = self.model(**batch)
-        loss = outputs.loss
-        self.log("val_loss", loss)
-        return loss
-
-    def test_step(self, batch, batch_idx):
-        outputs = self.model(**batch)
-        loss = outputs.loss
-        return loss
-
-    def configure_optimizers(self):
-        return torch.optim.AdamW(self.model.parameters(), lr=self.hparams.lr)
+        loss = None
+        if labels is not None:
+            if every_loss:
+                loss_fct = CrossEntropyLoss(reduction='none')
+            else:
+                loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+        
+        return Output(loss=loss, logits=logits)
