@@ -2,4 +2,6 @@
 /output/
 /lightning_logs/
 /data/
+/IF_out/
+pattern/
 __pycache__/
