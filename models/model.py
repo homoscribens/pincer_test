@@ -13,6 +13,7 @@ class Output(ModelOutput):
     loss: torch.FloatTensor = None
     logits: torch.FloatTensor = None
 
+
 class BertClassifier(BertPreTrainedModel):
     def __init__(self, config=BertConfig):
         super(BertClassifier, self).__init__(config)
