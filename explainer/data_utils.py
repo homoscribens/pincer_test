@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
-@dataclass(frozen=True)
+
+@dataclass
 class MaskedPattern:
     masked_sentence: str
     masked_len: int
@@ -9,7 +10,8 @@ class MaskedPattern:
     origin_pred: float
     masked_pred: float
 
-@dataclass(frozen=True)
+@dataclass
 class Examples(MaskedPattern):
     keywords: list
-    examples: list
+    examples_idx: list
+    generality: float = None
