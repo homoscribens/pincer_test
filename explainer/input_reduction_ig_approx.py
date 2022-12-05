@@ -81,12 +81,12 @@ def enumerate_hypothesis(s, cls_explainer, model, tokenizer):
         logit = logit.cpu().softmax(dim=0).numpy()
 
         predictions.append(MaskedPattern(masked_sentence=s,
-                            masked_len= len([t for t in masked_x if t == tokenizer.mask_token_id]),
-                            correct=origin_logits.argmax() == logit.argmax(),
-                            score_diff=origin_logits.max() - logit.max(),
-                            origin_pred=origin_logits.argmax().item(),
-                            masked_pred=logit.argmax(0).item(),
-                            ))
+                                         masked_len= len([t for t in masked_x if t == tokenizer.mask_token_id]),
+                                         correct=origin_logits.argmax() == logit.argmax(),
+                                         score_diff=origin_logits.max() - logit.max(),
+                                         origin_pred=origin_logits.argmax().item(),
+                                         masked_pred=logit.argmax(0).item(),
+                                         ))
         
     predictions.sort(key=lambda x: (-int(x.correct), -x.masked_len, -x.score_diff))
     return predictions
