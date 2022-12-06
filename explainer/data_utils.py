@@ -10,6 +10,7 @@ class MaskedPattern:
     origin_pred: float
     masked_pred: float
 
+
 @dataclass
 class Examples(MaskedPattern):
     keywords: list
