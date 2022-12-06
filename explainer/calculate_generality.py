@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from datasets import load_from_disk, load_dataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from tqdm import tqdm
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
     
 
 def load_datas(pattern_dir):
-    logger.info(f"Loading data...")
+    logger.info(f'Loading data...')
     dataset = load_dataset('imdb', split='unsupervised')
     masked_pattern = pickle.load(open(pattern_dir / 'masked_pattern.pkl', 'rb'))
     return dataset, masked_pattern
@@ -37,13 +37,15 @@ def remove_stopwords(text):
     return text
 
 def create_corpus(dataset, masked_patern, tokenizer):
-    logger.info(f"Creating corpus...")
+    logger.info(f'Creating corpus...')
+    logger.info(f'Number of available seed pattern: {len(masked_patern)}')
     
     def tokenize(example):
         example['tokenized'] = tokenizer.tokenize(example['text'])
         return example
     
     aggr_examples = []
+    logger.info('Tokenizing dataset...')
     tokenixed_texts = dataset.map(tokenize, batched=False)['tokenized']
     tokenixed_texts = list(map(set, tokenixed_texts))
     stopwords = list(string.punctuation)
@@ -64,9 +66,15 @@ def create_corpus(dataset, masked_patern, tokenizer):
     return aggr_examples
 
 def calculate_generality(aggr_examples, model, tokenizer, dataset):
-    logger.info(f'Number of pattern: {len(aggr_examples)}')
+    logger.info('########### Calculating pattern generality ###########')
+    logger.info(f'Number of available pattern: {len(aggr_examples)}')
+    logger.info(f'Number of corpus: {len(dataset)}')
+    logger.info('The estimated run time is quite unstable since it depends on the number of examples in each pattern.')
+    
+    model.eval()
+    logger.info(f'Tokenizing dataset into input_ids...')
     dataset = dataset.map(lambda x: tokenizer(x['text'], padding=True, truncation=True, return_tensors='pt'), batched=True, batch_size=None)
-    dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'token_type_ids'])
+    dataset.set_format(type='torch', columns=['input_ids', 'attention_mask']) # Roberta doesn't need token_type_ids
     for example in tqdm(aggr_examples, desc='Calculating generality'):
         if not example.examples_idx:
             continue
@@ -74,17 +82,18 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset):
         num_same = 0
         examples = dataset.select(example.examples_idx)
         dataloader = DataLoader(examples, batch_size=32)
-        for batch in tqdm(dataloader, desc='Inference', leave=False):
-            batch = {k: v.to(model.device) for k, v in batch.items()}
-            pred = model(**batch).logits.detach().cpu().numpy().argmax(axis=1)
-            num_same += (pred == origin_pred).sum().item()
-        example.generality = num_same / len(example.examples_idx)
+        with torch.inference_mode():
+            for batch in tqdm(dataloader, desc='Predicting for examples', leave=False):
+                batch = {k: v.to(model.device) for k, v in batch.items()}
+                pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
+                num_same += (pred == origin_pred).sum().item()
+            example.generality = num_same / len(example.examples_idx)
 
 def main(args):
     # Setup
     dataset, masked_patern = load_datas(args.pattern_dir)
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = BertClassifier.from_pretrained(args.model_path)
+    tokenizer = AutoTokenizer.from_pretrained('roberta-base')
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name)
     model.to(args.device)
     
     # Create corpus that contains tokens in each pattern
@@ -94,13 +103,13 @@ def main(args):
     calculate_generality(aggr_examples, model, tokenizer, dataset)
     
     # Save
-    logger.info(f"Saving to {args.output_dir}")
+    logger.info(f'Saving to {args.output_dir}')
     with open(args.output_dir / 'examples.pkl', 'wb') as f:
         pickle.dump(aggr_examples, f)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', type=str, default='bert-base-uncased')
+    parser.add_argument('--model_name', type=str, default='cardiffnlp/twitter-roberta-base-sentiment')
     parser.add_argument('--task', type=str, default='SA')
     args = parser.parse_args()
 
