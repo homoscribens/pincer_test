@@ -16,10 +16,10 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from tqdm import tqdm
 
-from model import BertClassifier
+from .model import BertClassifier
 
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 logging.basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
                     datefmt='%Y/%d/%m %H:%M:%S',
@@ -84,13 +84,13 @@ def load_dataset(tokenizer, task, data_dir):
         else:
             raise ValueError('Task not supported')
 
-        train_dataset = train_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
-        val_dataset = val_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
-        test_dataset = test_dataset.map(lambda examples: {"labels": examples["label"]}, batched=True)
+        train_dataset = train_dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
+        val_dataset = val_dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
+        test_dataset = test_dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
 
-        train_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
-        val_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
-        test_dataset.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids", "labels"])
+        train_dataset.set_format('torch', columns=['input_ids', 'attention_mask', 'token_type_ids', 'labels'])
+        val_dataset.set_format('torch', columns=['input_ids', 'attention_mask', 'token_type_ids', 'labels'])
+        test_dataset.set_format('torch', columns=['input_ids', 'attention_mask', 'token_type_ids', 'labels'])
 
         logger.info(f'Saving dataset to {data_dir}')
         data_dir.mkdir(parents=True)
@@ -151,7 +151,7 @@ def train_model(model, train_loader, val_loader, optimizer, num_epochs, output_d
         logger.info('Saving model...')
         model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
 
-        epoch_output_dir = output_dir / task / f"epoch={epoch}"
+        epoch_output_dir = output_dir / task / f'epoch={epoch}'
         if not epoch_output_dir.exists():
             epoch_output_dir.mkdir(parents=True)
 
@@ -186,7 +186,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # Required parameters
-    parser.add_argument("--task", default='SA', type=str)
+    parser.add_argument('--task', default='SA', type=str)
     # Training arguments
     parser.add_argument('--model_name', type=str, default='bert-base-uncased')
     parser.add_argument('--lr', type=float, default=1e-5)
