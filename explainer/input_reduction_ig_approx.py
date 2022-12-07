@@ -157,7 +157,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     BASE_DIR = pathlib.Path(__file__).parent.parent
-    args.model_path = BASE_DIR / 'output' / 'SA' / 'epoch=4'
+    args.model_path = BASE_DIR / 'output' / args.task / 'epoch=4'
 
     args.data_dir = BASE_DIR / 'data' / args.task
 
