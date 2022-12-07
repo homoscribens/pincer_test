@@ -27,8 +27,6 @@ logging.basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(messa
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = 'cardiffnlp/twitter-roberta-base-sentiment'
-
 
 def load_data(data_dir, IF):
     if IF:
@@ -81,12 +79,12 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
 def enumerate_hypothesis(sentence, cls_explainer, model, tokenizer):
     sentence = clean_text(sentence)
     encoded = tokenizer(sentence, return_tensors='pt').to('cuda')
+    
+    erased_inputs = create_erased_inputs(encoded, sentence, cls_explainer, tokenizer)
 
     with torch.inference_mode():
-        output = model(input_ids=encoded['input_ids'])
-        origin_logits = output.logits[0].cpu().numpy()
-
-        erased_inputs = create_erased_inputs(encoded, sentence, cls_explainer, tokenizer)
+        origin_output = model(input_ids=encoded['input_ids'])
+        origin_logits = origin_output.logits[0].cpu().numpy()
 
         if erased_inputs is None:
             return None
@@ -110,10 +108,11 @@ def enumerate_hypothesis(sentence, cls_explainer, model, tokenizer):
     return predictions
 
 def main(args):
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+    logger.info(f'Loading model')
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_name)
     # model = load_model(args.model_path, device=args.device)
     model = model.to(args.device)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
     cls_explainer = SequenceClassificationExplainer(
         model,
@@ -152,12 +151,18 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--IF', action='store_true')
-    parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--task', type=str, default='SA')
+    
     args = parser.parse_args()
 
     BASE_DIR = pathlib.Path(__file__).parent.parent
     args.model_path = BASE_DIR / 'output' / args.task / 'epoch=4'
+    
+    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    if args.task == 'SA':
+        args.model_name = 'cardiffnlp/twitter-roberta-base-sentiment-latest'
+        args.tokenizer = 'roberta-base' # 'cardiffnlp/twitter-roberta-base-sentiment' has ill defined tokenizer
 
     args.data_dir = BASE_DIR / 'data' / args.task
 
