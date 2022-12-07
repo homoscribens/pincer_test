@@ -80,6 +80,8 @@ def enumerate_hypothesis(sentence, cls_explainer, model, tokenizer):
     sentence = clean_text(sentence)
     encoded = tokenizer(sentence, return_tensors='pt').to('cuda')
     
+    # Put outside of inference mode to get the word attributions,
+    # otherwise the gradients will not be computed. (it disconnects the graph)
     erased_inputs = create_erased_inputs(encoded, sentence, cls_explainer, tokenizer)
 
     with torch.inference_mode():
