@@ -80,7 +80,12 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset):
             continue
         origin_pred = example.origin_pred
         num_same = 0
-        examples = dataset.select(example.examples_idx)
+        # Truncate examples to 2500 if the number of examples is too large
+        if len(example.examples_idx) >= 2500:
+            examples = dataset.select(example.examples_idx[:2500])
+            example.isTruncated = True
+        else:
+            examples = dataset.select(example.examples_idx)
         dataloader = DataLoader(examples, batch_size=32)
         example_preds = []
         with torch.inference_mode():
@@ -89,7 +94,7 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset):
                 pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
                 num_same += (pred == origin_pred).sum().item()
                 example_preds.extend(pred.tolist())
-            example.generality = num_same / len(example.examples_idx)
+            example.generality = num_same / len(examples)
             example.example_preds = example_preds
 
 def main(args):

@@ -33,7 +33,7 @@ def load_data(data_dir, IF):
         dataset = load_from_disk(data_dir / 'reduced_train')
     else:
         dataset = load_dataset('tweet_eval', 'sentiment', split='test')
-        dataset = dataset.shuffle(seed=42).select(range(500))
+        dataset = dataset.shuffle(seed=42).select(range(1000))
     return dataset
 
 def load_model(model_path, device='cuda'):
@@ -76,9 +76,11 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     
     return torch.stack(erased[:-1])
 
-def enumerate_hypothesis(sentence, cls_explainer, model, tokenizer):
-    sentence = clean_text(sentence)
+def enumerate_hypothesis(data, cls_explainer, model, tokenizer):
+    sentence = clean_text(data['text'])
     encoded = tokenizer(sentence, return_tensors='pt').to('cuda')
+    
+    gold_label = data['label']
     
     # Put outside of inference mode to get the word attributions,
     # otherwise the gradients will not be computed. (it disconnects the graph)
@@ -104,6 +106,7 @@ def enumerate_hypothesis(sentence, cls_explainer, model, tokenizer):
                                          score_diff=origin_logits.max() - logit.max(),
                                          origin_pred=origin_logits.argmax().item(),
                                          masked_pred=logit.argmax(0).item(),
+                                         gold_label=gold_label,
                                          ))
         
     predictions.sort(key=lambda x: (-int(x.correct), -x.masked_len, -x.score_diff))
@@ -139,7 +142,7 @@ def main(args):
         masked_pattern = []
         none = 0
         for data in tqdm(pattern_data):
-            pattern = enumerate_hypothesis(data['text'], cls_explainer, model, tokenizer)
+            pattern = enumerate_hypothesis(data, cls_explainer, model, tokenizer)
             if pattern is not None:
                 masked_pattern.append(pattern[0])
             else:
