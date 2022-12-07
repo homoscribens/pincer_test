@@ -2,8 +2,8 @@ import re
 import pathlib
 import itertools
 import argparse
-import logging
 import pickle
+from logging import getLogger, basicConfig, INFO
 
 from dataclasses import dataclass, field
 
@@ -22,10 +22,10 @@ from tqdm import tqdm
 from .data_utils import MaskedPattern
 
 
-logging.basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
+basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
                     datefmt='%Y/%d/%m %H:%M:%S',
-                    level=logging.INFO)
-logger = logging.getLogger(__name__)
+                    level=INFO)
+logger = getLogger(__name__)
 
 
 def load_data(data_dir, IF):

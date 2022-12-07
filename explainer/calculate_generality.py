@@ -1,9 +1,9 @@
-import logging
 import argparse
 import pathlib
 import pickle
 import json
 import string
+from logging import getLogger, basicConfig, INFO
 
 from dataclasses import dataclass, field
 
@@ -18,10 +18,10 @@ from tqdm import tqdm
 from models.model import BertClassifier
 from .data_utils import Examples, MaskedPattern
 
-logging.basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
+basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
                     datefmt='%Y/%d/%m %H:%M:%S',
-                    level=logging.INFO)
-logger = logging.getLogger(__name__)
+                    level=INFO)
+logger = getLogger(__name__)
     
 
 def load_datas(pattern_dir):

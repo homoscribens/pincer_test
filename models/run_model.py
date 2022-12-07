@@ -1,8 +1,8 @@
 import os
 import pathlib
 import argparse
-import logging
 import random
+from logging import getLogger, basicConfig, INFO
 
 import numpy as np
 
@@ -21,10 +21,10 @@ from .model import BertClassifier
 
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
-logging.basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
+basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
                     datefmt='%Y/%d/%m %H:%M:%S',
-                    level=logging.INFO)
-logger = logging.getLogger(__name__)
+                    level=INFO)
+logger = getLogger(__name__)
 
 CONFIG_NAME = 'config.json'
 WEIGHTS_NAME = 'pytorch_model.bin'
