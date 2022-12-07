@@ -82,17 +82,20 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset):
         num_same = 0
         examples = dataset.select(example.examples_idx)
         dataloader = DataLoader(examples, batch_size=32)
+        example_preds = []
         with torch.inference_mode():
             for batch in tqdm(dataloader, desc='Predicting for examples', leave=False):
                 batch = {k: v.to(model.device) for k, v in batch.items()}
                 pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
                 num_same += (pred == origin_pred).sum().item()
+                example_preds.extend(pred.tolist())
             example.generality = num_same / len(example.examples_idx)
+            example.example_preds = example_preds
 
 def main(args):
     # Setup
     dataset, masked_patern = load_datas(args.pattern_dir)
-    tokenizer = AutoTokenizer.from_pretrained('roberta-base')
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     model = AutoModelForSequenceClassification.from_pretrained(args.model_name)
     model.to(args.device)
     
@@ -109,7 +112,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', type=str, default='cardiffnlp/twitter-roberta-base-sentiment')
+    parser.add_argument('--model_name', type=str, default='cardiffnlp/twitter-roberta-base-sentiment-latest')
     parser.add_argument('--task', type=str, default='SA')
     args = parser.parse_args()
 
@@ -117,6 +120,8 @@ if __name__ == '__main__':
     args.pattern_dir = BASE_DIR / 'explainer' / 'pattern' / args.task
     
     args.model_path = BASE_DIR / 'output' / args.task / 'epoch=4'
+    
+    args.tokenizer = 'roberta-base'
 
     output_dir = BASE_DIR / 'explainer' / 'examples' / args.task
     if not output_dir.exists():
