@@ -18,5 +18,6 @@ class Examples(MaskedPattern):
     examples_idx: list
     isTruncated: bool = False
     example_preds: list = None
+    example_f1: float = None
     generality: float = None
     
