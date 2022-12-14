@@ -1,8 +1,10 @@
 import pickle
 import pathlib
+import argparse
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 
 from .data_utils import Examples, MaskedPattern
@@ -53,7 +55,7 @@ def example_prediction_dist(fig_dir, examples):
     ax.bar(np.arange(0, 3), np.bincount(preds))
     plt.savefig(fig_dir / 'example_prediction_dist.png')
     
-def generality_vs_num_examples(fig_dir, examples):
+def generality_vs_num_examples(fig_dir, examples, task):
     gen_pos, gen_neu, gen_neg = [], [], []
     num_pos, num_neu, num_neg = [], [], []
     for e in examples:
@@ -73,7 +75,10 @@ def generality_vs_num_examples(fig_dir, examples):
     ax.scatter(gen_pos, num_pos)
     ax.scatter(gen_neu, num_neu)
     ax.scatter(gen_neg, num_neg)
-    fig.legend(['Positive', 'Neutral', 'Negative'])
+    if task == 'SA':
+        fig.legend(['Positive', 'Neutral', 'Negative'])
+    elif task == 'NLI':
+        fig.legend(['Entailment', 'Neutral', 'Contradiction'])
     fig.savefig(fig_dir / 'generality_vs_num_examples.png')
     
 def generality_vs_example_f1(fig_dir, examples):
@@ -81,12 +86,18 @@ def generality_vs_example_f1(fig_dir, examples):
     f1 = []
     for e in examples:
         if e.generality is not None:
-            generality.append(e.generality)
-            f1.append(e.example_f1)
+            if len(e.example_preds) >= 10:
+                generality.append(e.generality)
+                f1.append(e.example_f1)
+    
+    clf = LinearRegression()
+    clf.fit(np.array(generality).reshape(-1, 1), np.array(f1))
+    
     
     fig = plt.figure()
     ax = fig.add_subplot(111, xlabel='Generality', ylabel='F1', title='Generality vs Example F1')
     ax.scatter(generality, f1)
+    ax.plot(np.array(generality).reshape(-1, 1), clf.predict(np.array(generality).reshape(-1, 1)), color='red')
     fig.savefig(fig_dir / 'generality_vs_example_f1.png')
     
 def create_dataframes(examples):
@@ -127,29 +138,32 @@ def glance_at_data(examples):
                 print(e.origin_pred)
                 print('-----------------')
 
-def main(examples,fig_dir):
-    
+def main(args, examples):
     # glance_at_data(examples)
-    generality_hist(fig_dir, examples)
-    generality_vs_prediction(fig_dir, examples)
-    num_examples_hist(fig_dir, examples)
-    prediction_dist(fig_dir, examples)
-    example_prediction_dist(fig_dir, examples)
-    generality_vs_num_examples(fig_dir, examples)
-    generality_vs_example_f1(fig_dir, examples)
+    generality_hist(args.fig_dir, examples)
+    generality_vs_prediction(args.fig_dir, examples)
+    num_examples_hist(args.fig_dir, examples)
+    prediction_dist(args.fig_dir, examples)
+    example_prediction_dist(args.fig_dir, examples)
+    generality_vs_num_examples(args.fig_dir, examples, args.task)
+    generality_vs_example_f1(args.fig_dir, examples)
     
     df = create_dataframes(examples)
-    df.to_csv(fig_dir / 'data.csv')
+    df.to_csv(args.fig_dir / 'data.csv')
     
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--task', type=str, default='SA')
+    args = parser.parse_args()
     BASE = BASE_DIR = pathlib.Path(__file__).parent.parent
-    path = BASE / 'explainer' / 'examples' / 'SA' / 'examples.pkl'
-    fig_dir = BASE / 'explainer' / 'examples' / 'SA' / 'figs'
+    path = BASE / 'explainer' / 'examples' / args.task / 'examples.pkl'
+    fig_dir = BASE / 'explainer' / 'examples' / args.task / 'figs'
     
     if not fig_dir.exists():
         fig_dir.mkdir()
+    args.fig_dir = fig_dir
     
     with open(path, 'rb') as f:
         examples = pickle.load(f)
         
-    main(examples, fig_dir)
+    main(args, examples)
