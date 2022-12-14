@@ -67,20 +67,22 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     word_attributions = cls_explainer(sentence)
 
     erased = []
-    mod_input_ids = encoded.input_ids[0].clone()
+    mod_input_ids = encoded['input_ids'][0].clone()
 
     word_attributions = [(word, score) for word, score in word_attributions if word != '']
     
     # format input_ids to the same format as transformers_interpret
-    for _ in range(len(mod_input_ids)):
+    while True:
         idx = get_index(tokenizer.convert_ids_to_tokens(mod_input_ids))
         if idx:
             mod_input_ids = torch.cat([mod_input_ids[:idx], mod_input_ids[idx+1:]])
+        else:
+            break
             
     assert len(word_attributions) == len(mod_input_ids), f'{word_attributions} != {tokenizer.convert_ids_to_tokens(mod_input_ids)}'
 
     for i, _ in sorted(enumerate(word_attributions), key=lambda x: x[1][1]):
-        if i == 0 or i == encoded.input_ids[0].shape[0]-1 or mod_input_ids[i] == tokenizer.sep_token_id:
+        if i == 0 or i == encoded['input_ids'][0].shape[0]-1 or mod_input_ids[i] == tokenizer.sep_token_id:
             continue
         mod_input_ids[i] = tokenizer.mask_token_id
         
@@ -92,34 +94,35 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     
     return torch.stack(erased[:-1])
 
-def enumerate_hypothesis(dataset, cls_explainer, model, tokenizer, task):
+def enumerate_hypothesis(dataset, cls_explainer, model, tokenizer, task, device='cuda'):
     dataset = preprocess(dataset, tokenizer, task=task)
     
     none = 0
     aggr_predictions = []
     for data in tqdm(dataset, desc='Masking'):
         sentence = data['text']
-        encoded = tokenizer(sentence, return_tensors='pt').to('cuda')
+        encoded = tokenizer(sentence, return_tensors='pt')
+        encoded = {k: v.to(device) for k, v in encoded.items()}
         
         gold_label = data['label']
         
         # Put outside of inference mode to get the word attributions,
         # otherwise the gradients will not be computed. (it disconnects the graph)
         erased_inputs = create_erased_inputs(encoded, sentence, cls_explainer, tokenizer)
-
+        if erased_inputs is None:
+            none += 1
+            continue
+        
         with torch.inference_mode():
             origin_output = model(input_ids=encoded['input_ids'])
-            origin_logits = origin_output.logits[0].cpu().numpy()
-
-            if erased_inputs is None:
-                return None
+            origin_logits = origin_output.logits[0].detach().cpu().numpy()
 
             output = model(input_ids=erased_inputs)
 
         predictions = []
 
         for logit, masked_sentence, masked_sentence_seq in zip(output.logits, erased_inputs, tokenizer.batch_decode(erased_inputs)):
-            logit = logit.cpu().softmax(dim=0).numpy()
+            logit = logit.detach().cpu().softmax(dim=0).numpy()
             
             predictions.append(MaskedPattern(masked_sentence=masked_sentence_seq,
                                             masked_len= len([token for token in masked_sentence if token == tokenizer.mask_token_id]),
@@ -131,11 +134,12 @@ def enumerate_hypothesis(dataset, cls_explainer, model, tokenizer, task):
                                             ))
             
         predictions.sort(key=lambda x: (-int(x.correct), -x.masked_len, -x.score_diff))
+        
         if predictions is not None:
                 aggr_predictions.append(predictions[0])
         else:
             none += 1
-    logger.info(f'None: {none}')
+    logger.info(f'Availabe pattern {len(aggr_predictions) - none}')
     return aggr_predictions
 
 def main(args):
@@ -165,8 +169,7 @@ def main(args):
                 masked_inf.append(masked)
     else:
         logger.info('Iterating reductive maksing...')
-        masked_pattern = enumerate_hypothesis(pattern_data, cls_explainer, model, tokenizer, args.task)
-        
+        masked_pattern = enumerate_hypothesis(pattern_data, cls_explainer, model, tokenizer, args.task, device=args.device)
         logger.info(f'Saving to {args.output_dir}')
         with open(args.output_dir / 'masked_pattern.pkl', 'wb') as f:
             pickle.dump(masked_pattern, f)
