@@ -66,7 +66,9 @@ def get_examples(dataset, masked_patern, tokenizer, task):
     if task == 'SA':
         
         def tokenize(example):
-            example['tokenized'] = tokenizer.tokenize(example['text'])
+            tokenized = tokenizer.tokenize(example['text'])
+            tokenized = [token.replace('Ġ', '') for token in tokenized if not token == 'Ġ']
+            example['tokenized'] = tokenized
             return example
         
         logger.info('Tokenizing dataset...')
@@ -74,52 +76,60 @@ def get_examples(dataset, masked_patern, tokenizer, task):
         tokenized_texts = list(map(set, tokenized_texts))
         
         for pattern in tqdm(masked_patern, desc='Collecting examples'):
-            key_words = [word for word in tokenizer.tokenize(pattern.masked_sentence)
-                        if word not in stopwords+special_tokens]
+            tokenized = tokenizer.tokenize(pattern.masked_sentence)
+            tokenized = [token.replace('Ġ', '') for token in tokenized if not token == 'Ġ']
+            key_words = [word for word in tokenized if word not in special_tokens]
             
             if not key_words:
                 continue
             
             example_indicies = []
             for i, text in enumerate(tokenized_texts):
-                if all((kw in text and kw != '') for kw in key_words):
+                if set(key_words).issubset(text):
                     example_indicies.append(i)
                     
             aggr_examples.append(Examples(**vars(pattern), 
-                                        keywords=key_words, 
-                                        examples_idx=example_indicies)) 
+                                          keywords=key_words,
+                                          examples_idx=example_indicies)) 
         
     elif task == 'NLI':
         
         def tokenize(example):
-            example['tokenized_premise'] = tokenizer.tokenize(example['premise'])
-            example['tokenized_hypothesis'] = tokenizer.tokenize(example['hypothesis'])
+            tokenized_premise = tokenizer.tokenize(example['premise'])
+            tokenized_hypothesis = tokenizer.tokenize(example['hypothesis'])
+            tokenized_premise = [token.replace('Ġ', '') for token in tokenized_premise if not token == 'Ġ']
+            tokenized_hypothesis = [token.replace('Ġ', '') for token in tokenized_hypothesis if not token == 'Ġ']
+            example['tokenized_premise'] = tokenized_premise
+            example['tokenized_hypothesis'] = tokenized_hypothesis
             return example
         
         logger.info('Tokenizing dataset...')
         tokenized_premise = dataset.map(tokenize, batched=False)['tokenized_premise']
         tokenized_hypothesis = dataset.map(tokenize, batched=False)['tokenized_hypothesis']
+        tokenized_premise = list(map(set, tokenized_premise))
+        tokenized_hypothesis = list(map(set, tokenized_hypothesis))
         
         for pattern in tqdm(masked_patern, desc='Collecting examples'):
+            tokenized_pattern = tokenizer.tokenize(pattern.masked_sentence)
+            tokenized_pattern = [token.replace('Ġ', '') for token in tokenized_pattern if not token == 'Ġ']
             sep_token = tokenizer.sep_token
-            sep_idx = pattern.masked_sentence.index(sep_token)
-            keywords_premise = [word for word in tokenizer.tokenize(pattern.masked_sentence[:sep_idx])
-                                if word not in stopwords+special_tokens]
-            keywords_hypothesis = [word for word in tokenizer.tokenize(pattern.masked_sentence[sep_idx+len(sep_token):])
-                                   if word not in stopwords+special_tokens]
+            sep_idx = tokenized_pattern.index(sep_token)
+            keywords_premise = [word for word in tokenized_pattern[:sep_idx]
+                                if word not in special_tokens]
+            keywords_hypothesis = [word for word in tokenized_pattern[sep_idx+1:]
+                                   if word not in special_tokens]
             
             if not keywords_premise and not keywords_hypothesis:
                 continue
             
             example_indicies = []
             for i, (prem, hypo) in enumerate(zip(tokenized_premise, tokenized_hypothesis)):
-                if all((kw_prem in prem and kw_hypo in hypo and kw_prem != '' and kw_hypo != '') 
-                       for kw_prem, kw_hypo in zip(keywords_premise, keywords_hypothesis)):
+                if set(keywords_hypothesis).issubset(hypo) and set(keywords_premise).issubset(prem):
                     example_indicies.append(i)
                     
-            aggr_examples.append(Examples(**vars(pattern), 
-                                        keywords=keywords_premise + ['<SEP>'] + keywords_hypothesis, 
-                                        examples_idx=example_indicies)) 
+            aggr_examples.append(Examples(**vars(pattern),
+                                          keywords=keywords_premise + ['<SEP>'] + keywords_hypothesis, 
+                                          examples_idx=example_indicies)) 
     
     return aggr_examples
 
@@ -159,7 +169,7 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task):
         example_preds = []
         scores = []
         with torch.inference_mode():
-            for batch in tqdm(dataloader, desc='Predicting for examples', leave=False):
+            for batch in tqdm(dataloader, desc=f'Predicting example label({len(example.examples_idx)})', leave=False):
                 labels = batch.pop('labels').numpy()
                 batch = {k: v.to(model.device) for k, v in batch.items()}
                 pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
