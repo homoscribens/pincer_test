@@ -28,12 +28,17 @@ basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
 logger = getLogger(__name__)
 
 
-def load_data(data_dir, IF):
+def load_data(data_dir, IF, task):
     if IF:
         dataset = load_from_disk(data_dir / 'reduced_train')
     else:
-        dataset = load_dataset('tweet_eval', 'sentiment', split='test')
-        dataset = dataset.shuffle(seed=42).select(range(1000))
+        if task == 'SA':
+            dataset = load_dataset('tweet_eval', 'sentiment', split='test')
+            dataset = dataset.shuffle(seed=42).select(range(1000))
+        elif task == 'NLI':
+            dataset = load_dataset('glue', 'mnli', split='validation_matched')
+            dataset = dataset.shuffle(seed=42).select(range(1000))
+            
     return dataset
 
 def load_model(model_path, device='cuda'):
@@ -46,6 +51,17 @@ def clean_text(text):
         text = re.sub('([.,!?()])', r' \1 ', text)
         text = re.sub('\s{2,}', ' ', text)
         return text
+    
+def preprocess(dataset, tokenizer, task):
+    if task == 'NLI':
+        dataset = dataset.map(lambda x: {'text': clean_text(x['premise']) + f' {tokenizer.sep_token} '  + clean_text(x['hypothesis'])})
+    elif task == 'SA':
+        dataset = dataset.map(lambda x: {'text': clean_text(x['text'])})
+        
+    return dataset
+
+def get_index(l, default=False):
+    return l.index('Ġ') if 'Ġ' in l else default
 
 def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     word_attributions = cls_explainer(sentence)
@@ -56,15 +72,15 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     word_attributions = [(word, score) for word, score in word_attributions if word != '']
     
     # format input_ids to the same format as transformers_interpret
-    for i, token in enumerate(tokenizer.convert_ids_to_tokens(mod_input_ids)):
-        if token == 'Ġ':
-            # delete the ith token
-            mod_input_ids = torch.cat([mod_input_ids[:i], mod_input_ids[i+1:]])
-
+    for _ in range(len(mod_input_ids)):
+        idx = get_index(tokenizer.convert_ids_to_tokens(mod_input_ids))
+        if idx:
+            mod_input_ids = torch.cat([mod_input_ids[:idx], mod_input_ids[idx+1:]])
+            
     assert len(word_attributions) == len(mod_input_ids), f'{word_attributions} != {tokenizer.convert_ids_to_tokens(mod_input_ids)}'
 
     for i, _ in sorted(enumerate(word_attributions), key=lambda x: x[1][1]):
-        if i == 0 or i == encoded.input_ids[0].shape[0]-1:
+        if i == 0 or i == encoded.input_ids[0].shape[0]-1 or mod_input_ids[i] == tokenizer.sep_token_id:
             continue
         mod_input_ids[i] = tokenizer.mask_token_id
         
@@ -76,41 +92,51 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     
     return torch.stack(erased[:-1])
 
-def enumerate_hypothesis(data, cls_explainer, model, tokenizer):
-    sentence = clean_text(data['text'])
-    encoded = tokenizer(sentence, return_tensors='pt').to('cuda')
+def enumerate_hypothesis(dataset, cls_explainer, model, tokenizer, task):
+    dataset = preprocess(dataset, tokenizer, task=task)
     
-    gold_label = data['label']
-    
-    # Put outside of inference mode to get the word attributions,
-    # otherwise the gradients will not be computed. (it disconnects the graph)
-    erased_inputs = create_erased_inputs(encoded, sentence, cls_explainer, tokenizer)
-
-    with torch.inference_mode():
-        origin_output = model(input_ids=encoded['input_ids'])
-        origin_logits = origin_output.logits[0].cpu().numpy()
-
-        if erased_inputs is None:
-            return None
-
-        output = model(input_ids=erased_inputs)
-
-    predictions = []
-
-    for logit, masked_sentence, masked_sentence_seq in zip(output.logits, erased_inputs, tokenizer.batch_decode(erased_inputs)):
-        logit = logit.cpu().softmax(dim=0).numpy()
+    none = 0
+    aggr_predictions = []
+    for data in tqdm(dataset, desc='Masking'):
+        sentence = data['text']
+        encoded = tokenizer(sentence, return_tensors='pt').to('cuda')
         
-        predictions.append(MaskedPattern(masked_sentence=masked_sentence_seq,
-                                         masked_len= len([token for token in masked_sentence if token == tokenizer.mask_token_id]),
-                                         correct=origin_logits.argmax() == logit.argmax(),
-                                         score_diff=origin_logits.max() - logit.max(),
-                                         origin_pred=origin_logits.argmax().item(),
-                                         masked_pred=logit.argmax(0).item(),
-                                         gold_label=gold_label,
-                                         ))
+        gold_label = data['label']
         
-    predictions.sort(key=lambda x: (-int(x.correct), -x.masked_len, -x.score_diff))
-    return predictions
+        # Put outside of inference mode to get the word attributions,
+        # otherwise the gradients will not be computed. (it disconnects the graph)
+        erased_inputs = create_erased_inputs(encoded, sentence, cls_explainer, tokenizer)
+
+        with torch.inference_mode():
+            origin_output = model(input_ids=encoded['input_ids'])
+            origin_logits = origin_output.logits[0].cpu().numpy()
+
+            if erased_inputs is None:
+                return None
+
+            output = model(input_ids=erased_inputs)
+
+        predictions = []
+
+        for logit, masked_sentence, masked_sentence_seq in zip(output.logits, erased_inputs, tokenizer.batch_decode(erased_inputs)):
+            logit = logit.cpu().softmax(dim=0).numpy()
+            
+            predictions.append(MaskedPattern(masked_sentence=masked_sentence_seq,
+                                            masked_len= len([token for token in masked_sentence if token == tokenizer.mask_token_id]),
+                                            correct=origin_logits.argmax() == logit.argmax(),
+                                            score_diff=origin_logits.max() - logit.max(),
+                                            origin_pred=origin_logits.argmax().item(),
+                                            masked_pred=logit.argmax(0).item(),
+                                            gold_label=gold_label,
+                                            ))
+            
+        predictions.sort(key=lambda x: (-int(x.correct), -x.masked_len, -x.score_diff))
+        if predictions is not None:
+                aggr_predictions.append(predictions[0])
+        else:
+            none += 1
+    logger.info(f'None: {none}')
+    return aggr_predictions
 
 def main(args):
     logger.info(f'Loading model')
@@ -123,7 +149,7 @@ def main(args):
         model,
         tokenizer)
     
-    pattern_data = load_data(args.data_dir, args.IF)
+    pattern_data = load_data(args.data_dir, args.IF, args.task)
     if args.IF:
         inf_file_list = list(args.if_dir.glob('influence_test_idx_*.pkl'))
 
@@ -139,15 +165,7 @@ def main(args):
                 masked_inf.append(masked)
     else:
         logger.info('Iterating reductive maksing...')
-        masked_pattern = []
-        none = 0
-        for data in tqdm(pattern_data):
-            pattern = enumerate_hypothesis(data, cls_explainer, model, tokenizer)
-            if pattern is not None:
-                masked_pattern.append(pattern[0])
-            else:
-                none += 1
-        logger.info(f'Including None: {none}')
+        masked_pattern = enumerate_hypothesis(pattern_data, cls_explainer, model, tokenizer, args.task)
         
         logger.info(f'Saving to {args.output_dir}')
         with open(args.output_dir / 'masked_pattern.pkl', 'wb') as f:
@@ -168,6 +186,11 @@ if __name__ == '__main__':
     if args.task == 'SA':
         args.model_name = 'cardiffnlp/twitter-roberta-base-sentiment-latest'
         args.tokenizer = 'roberta-base' # 'cardiffnlp/twitter-roberta-base-sentiment' has ill defined tokenizer
+    elif args.task == 'NLI':
+        args.model_name = 'roberta-large-mnli'
+        args.tokenizer = args.model_name
+    else:
+        raise ValueError(f'Invalid task: {args.task}')
 
     args.data_dir = BASE_DIR / 'data' / args.task
 
