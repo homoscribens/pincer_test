@@ -40,11 +40,11 @@ def relabel(example):
 
 def load_datas(pattern_dir, task):
     logger.info(f'Loading data...')
-    if task == 'SA':
+    if task in ['SA', 'SA_train']:
         dataset = load_dataset('yelp_review_full', split='train')
         dataset = dataset.shuffle(seed=42).select(range(25000))
         dataset = dataset.map(relabel, batched=False)
-    elif task == 'NLI':
+    elif task in ['NLI', 'NLI_train']:
         dataset = load_dataset('anli', split='train_r1')
     masked_pattern = pickle.load(open(pattern_dir / 'masked_pattern.pkl', 'rb'))
     return dataset, masked_pattern
@@ -63,7 +63,7 @@ def get_examples(dataset, masked_patern, tokenizer, task):
     stopwords = list(string.punctuation)
     special_tokens = tokenizer.all_special_tokens
     
-    if task == 'SA':
+    if task in ['SA', 'SA_train']:
         
         def tokenize(example):
             tokenized = tokenizer.tokenize(example['text'])
@@ -92,7 +92,7 @@ def get_examples(dataset, masked_patern, tokenizer, task):
                                           keywords=key_words,
                                           examples_idx=example_indicies)) 
         
-    elif task == 'NLI':
+    elif task in ['NLI', 'NLI_train']:
         
         def tokenize(example):
             tokenized_premise = tokenizer.tokenize(example['premise'])
@@ -142,9 +142,9 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task):
     model.eval()
     
     logger.info(f'Tokenizing dataset into input_ids...')
-    if task == 'SA':
+    if task in ['SA', 'SA_train']:
         dataset = dataset.map(lambda x: tokenizer(x['text'], padding=True, truncation=True, return_tensors='pt'), batched=True, batch_size=None)
-    elif task == 'NLI':
+    elif task in ['NLI', 'NLI_train']:
         dataset = dataset.map(lambda x: tokenizer(x['premise'], x['hypothesis'], padding=True, truncation=True, return_tensors='pt'), batched=True, batch_size=None)
     dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
     dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels']) # Roberta doesn't need token_type_ids
@@ -226,12 +226,12 @@ if __name__ == '__main__':
     
     args.model_path = BASE_DIR / 'output' / args.task / 'epoch=4'
     
-    if args.task == 'SA':
+    if args.task in ['SA', 'SA_train']:
         args.model_name = 'cardiffnlp/twitter-roberta-base-sentiment-latest'
-        args.tokenizer = 'roberta-base'
-    elif args.task == 'NLI':
+        args.tokenizer = 'roberta-base' # 'cardiffnlp/twitter-roberta-base-sentiment' has ill defined tokenizer
+    elif args.task in ['NLI', 'NLI_train']:
         args.model_name = 'roberta-large-mnli'
-        args.tokenizer = 'roberta-large-mnli'
+        args.tokenizer = args.model_name
     else:
         raise ValueError(f'Invalid task: {args.task}')
 

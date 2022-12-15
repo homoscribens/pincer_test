@@ -28,17 +28,20 @@ basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
 logger = getLogger(__name__)
 
 
-def load_data(data_dir, IF, task):
+def load_data(data_dir, IF, task, data_size=1000):
     if IF:
         dataset = load_from_disk(data_dir / 'reduced_train')
     else:
         if task == 'SA':
             dataset = load_dataset('tweet_eval', 'sentiment', split='test')
-            dataset = dataset.shuffle(seed=42).select(range(1000))
+        elif task == 'SA_train':
+            dataset = load_dataset('tweet_eval', 'sentiment', split='train')
         elif task == 'NLI':
             dataset = load_dataset('glue', 'mnli', split='validation_matched')
-            dataset = dataset.shuffle(seed=42).select(range(1000))
+        elif task == 'NLI_train':
+            dataset = load_dataset('glue', 'mnli', split='train')
             
+        dataset = dataset.shuffle(seed=42).select(range(data_size))
     return dataset
 
 def load_model(model_path, device='cuda'):
@@ -53,10 +56,10 @@ def clean_text(text):
         return text
     
 def preprocess(dataset, tokenizer, task):
-    if task == 'NLI':
-        dataset = dataset.map(lambda x: {'text': clean_text(x['premise']) + f' {tokenizer.sep_token} '  + clean_text(x['hypothesis'])})
-    elif task == 'SA':
+    if task in ['SA', 'SA_train']:
         dataset = dataset.map(lambda x: {'text': clean_text(x['text'])})
+    elif task in ['NLI', 'NLI_train']:
+        dataset = dataset.map(lambda x: {'text': clean_text(x['premise']) + f' {tokenizer.sep_token} '  + clean_text(x['hypothesis'])})
         
     return dataset
 
@@ -153,7 +156,7 @@ def main(args):
         model,
         tokenizer)
     
-    pattern_data = load_data(args.data_dir, args.IF, args.task)
+    pattern_data = load_data(args.data_dir, args.IF, args.task, args.data_size)
     if args.IF:
         inf_file_list = list(args.if_dir.glob('influence_test_idx_*.pkl'))
 
@@ -178,6 +181,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--IF', action='store_true')
     parser.add_argument('--task', type=str, default='SA')
+    parser.add_argument('--data-size', type=int, default=1000)
     
     args = parser.parse_args()
 
@@ -186,10 +190,10 @@ if __name__ == '__main__':
     
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    if args.task == 'SA':
+    if args.task in ['SA', 'SA_train']:
         args.model_name = 'cardiffnlp/twitter-roberta-base-sentiment-latest'
         args.tokenizer = 'roberta-base' # 'cardiffnlp/twitter-roberta-base-sentiment' has ill defined tokenizer
-    elif args.task == 'NLI':
+    elif args.task in ['NLI', 'NLI_train']:
         args.model_name = 'roberta-large-mnli'
         args.tokenizer = args.model_name
     else:

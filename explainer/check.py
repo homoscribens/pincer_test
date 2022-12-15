@@ -75,9 +75,9 @@ def generality_vs_num_examples(fig_dir, examples, task):
     ax.scatter(gen_pos, num_pos)
     ax.scatter(gen_neu, num_neu)
     ax.scatter(gen_neg, num_neg)
-    if task == 'SA':
+    if task in ['SA', 'SA_train']:
         fig.legend(['Positive', 'Neutral', 'Negative'])
-    elif task == 'NLI':
+    elif task in ['NLI', 'NLI_train']:
         fig.legend(['Entailment', 'Neutral', 'Contradiction'])
     fig.savefig(fig_dir / 'generality_vs_num_examples.png')
     
@@ -92,7 +92,6 @@ def generality_vs_example_f1(fig_dir, examples):
     
     clf = LinearRegression()
     clf.fit(np.array(generality).reshape(-1, 1), np.array(f1))
-    
     
     fig = plt.figure()
     ax = fig.add_subplot(111, xlabel='Generality', ylabel='F1', title='Generality vs Example F1')
