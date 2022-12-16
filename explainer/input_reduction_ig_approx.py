@@ -27,7 +27,13 @@ basicConfig(format='[%(asctime)s] [%(levelname)s] <%(funcName)s> %(message)s',
                     level=INFO)
 logger = getLogger(__name__)
 
-
+def relabel(example):
+    if example['label'] == 0:
+        example['label'] = 2
+    elif example['label'] == 2:
+        example['label'] = 0
+    return example
+    
 def load_data(data_dir, IF, task, data_size=1000):
     if IF:
         dataset = load_from_disk(data_dir / 'reduced_train')
@@ -38,8 +44,10 @@ def load_data(data_dir, IF, task, data_size=1000):
             dataset = load_dataset('tweet_eval', 'sentiment', split='train')
         elif task == 'NLI':
             dataset = load_dataset('glue', 'mnli', split='validation_matched')
+            dataset = dataset.map(relabel, batched=True)
         elif task == 'NLI_train':
             dataset = load_dataset('glue', 'mnli', split='train')
+            dataset = dataset.map(relabel, batched=True)
             
         dataset = dataset.shuffle(seed=42).select(range(data_size))
     return dataset
