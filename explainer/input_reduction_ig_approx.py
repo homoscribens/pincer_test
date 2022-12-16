@@ -44,10 +44,10 @@ def load_data(data_dir, IF, task, data_size=1000):
             dataset = load_dataset('tweet_eval', 'sentiment', split='train')
         elif task == 'NLI':
             dataset = load_dataset('glue', 'mnli', split='validation_matched')
-            dataset = dataset.map(relabel, batched=True)
+            dataset = dataset.map(relabel, batched=False)
         elif task == 'NLI_train':
             dataset = load_dataset('glue', 'mnli', split='train')
-            dataset = dataset.map(relabel, batched=True)
+            dataset = dataset.map(relabel, batched=False)
             
         dataset = dataset.shuffle(seed=42).select(range(data_size))
     return dataset
