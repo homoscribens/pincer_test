@@ -189,8 +189,12 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task):
         example.example_f1 = np.mean(scores)
         example.example_preds = example_preds
             
-def model_performance(model, tokenizer, dataset):
-    dataset = dataset.map(lambda x: tokenizer(x['text'], padding=True, truncation=True, return_tensors='pt'), batched=True, batch_size=None)
+def model_performance(model, tokenizer, dataset, task):
+    if task in ['SA', 'SA_train']:
+        dataset = dataset.map(lambda x: tokenizer(x['text'], padding=True, truncation=True, return_tensors='pt'), batched=True, batch_size=None)
+    elif task in ['NLI', 'NLI_train']:
+        dataset = dataset.map(lambda x: tokenizer(x['premise'], x['hypothesis'], padding=True, truncation=True, return_tensors='pt'), batched=True, batch_size=None)
+        
     dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
     dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels']) # Roberta doesn't need token_type_ids
     dataLoader = DataLoader(dataset, batch_size=32)
@@ -216,9 +220,9 @@ def main(args):
     # Calculate generality
     calculate_generality(aggr_examples, model, tokenizer, dataset, args.task)
     
-    #score = model_performance(model, tokenizer, dataset)
-    #logger.info(f'Corpus F1: {score}')
-    
+    score = model_performance(model, tokenizer, dataset, args.task)
+    logger.info(f'Corpus F1: {score}')
+
     # Save
     logger.info(f'Saving to {args.output_dir}')
     with open(args.output_dir / 'examples.pkl', 'wb') as f:
