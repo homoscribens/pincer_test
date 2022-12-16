@@ -141,7 +141,7 @@ def get_examples(dataset, masked_patern, tokenizer, task):
     
     return aggr_examples
 
-def calculate_generality(aggr_examples, model, tokenizer, dataset, task):
+def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_f1):
     logger.info('########### Calculating pattern generality ###########')
     logger.info(f'Number of available pattern: {len(aggr_examples)}')
     logger.info(f'Number of corpus: {len(dataset)}')
@@ -187,6 +187,7 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task):
                 
         example.generality = num_same / len(examples)
         example.example_f1 = np.mean(scores)
+        example.f1_diff = example.example_f1 - corpus_f1
         example.example_preds = example_preds
             
 def model_performance(model, tokenizer, dataset, task):
@@ -217,11 +218,11 @@ def main(args):
     # Create corpus that contains tokens in each pattern
     aggr_examples = get_examples(dataset, masked_patern, tokenizer, args.task)
     
-    # Calculate generality
-    calculate_generality(aggr_examples, model, tokenizer, dataset, args.task)
-    
     score = model_performance(model, tokenizer, dataset, args.task)
     logger.info(f'Corpus F1: {score}')
+    
+    # Calculate generality
+    calculate_generality(aggr_examples, model, tokenizer, dataset, args.task, score)
 
     # Save
     logger.info(f'Saving to {args.output_dir}')
