@@ -120,6 +120,7 @@ def create_dataframes(examples):
                             'num_examples': len(e.examples_idx),
                             'truncate': e.isTruncated,
                             'example_f1': e.example_f1,
+                            'f1_diff': e.f1_diff,
                             'pred_0 %': preds_dist[0] / len(e.example_preds),
                             'pred_1 %': preds_dist[1] / len(e.example_preds),
                             'pred_2 %': preds_dist[2] / len(e.example_preds)})
