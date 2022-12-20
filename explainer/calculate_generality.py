@@ -29,12 +29,12 @@ logger = getLogger(__name__)
 
 
 def relabel_sa(example):
-    label = example['label']
-    if label <= 1:
+    label = example['sentiment']
+    if label == 0:
         example['label'] = 0
     elif label == 2:
         example['label'] = 1
-    elif label >= 3:
+    elif label == 4:
         example['label'] = 2
     return example
 
@@ -48,11 +48,11 @@ def relabel_nli(example):
 def load_datas(pattern_dir, task):
     logger.info(f'Loading data...')
     if task in ['SA', 'SA_train']:
-        dataset = load_dataset('yelp_review_full', split='train')
-        dataset = dataset.shuffle(seed=42).select(range(25000))
+        dataset = load_dataset('sentiment140', split='train')
+        dataset = dataset.shuffle(seed=42).select(range(50000))
         dataset = dataset.map(relabel_sa, batched=False)
     elif task in ['NLI', 'NLI_train']:
-        dataset = load_dataset('anli', split='train_r1')
+        dataset = load_dataset('anli', split='train_r3')
         dataset = dataset.map(relabel_nli, batched=False)
     masked_pattern = pickle.load(open(pattern_dir / 'masked_pattern.pkl', 'rb'))
     return dataset, masked_pattern
