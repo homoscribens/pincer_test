@@ -86,7 +86,7 @@ def generality_vs_example_f1(fig_dir, examples):
     f1 = []
     for e in examples:
         if e.generality is not None:
-            if len(e.example_preds) >= 10:
+            if len(e.example_preds) >= 100:
                 generality.append(e.generality)
                 f1.append(e.example_f1)
     
@@ -98,6 +98,20 @@ def generality_vs_example_f1(fig_dir, examples):
     ax.scatter(generality, f1)
     ax.plot(np.array(generality).reshape(-1, 1), clf.predict(np.array(generality).reshape(-1, 1)), color='red')
     fig.savefig(fig_dir / 'generality_vs_example_f1.png')
+    
+def generality_vs_f1_diff(fig_dir, examples):
+    generality = []
+    f1_diff = []
+    for e in examples:
+        if e.generality is not None:
+            if len(e.example_preds) >= 100:
+                generality.append(e.generality)
+                f1_diff.append(e.f1_diff)
+    
+    fig = plt.figure()
+    ax = fig.add_subplot(111, xlabel='Generality', ylabel='F1 difference', title='Generality vs F1 difference')
+    ax.scatter(generality, f1_diff)
+    fig.savefig(fig_dir / 'generality_vs_f1_diff.png')
     
 def create_dataframes(examples):
     df_list = []
@@ -147,6 +161,7 @@ def main(args, examples):
     example_prediction_dist(args.fig_dir, examples)
     generality_vs_num_examples(args.fig_dir, examples, args.task)
     generality_vs_example_f1(args.fig_dir, examples)
+    generality_vs_f1_diff(args.fig_dir, examples)
     
     df = create_dataframes(examples)
     df.to_csv(args.fig_dir / 'data.csv')
