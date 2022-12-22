@@ -29,13 +29,14 @@ logger = getLogger(__name__)
 
 
 def relabel_sa(example):
-    label = example['sentiment']
-    if label == 0:
+    label = example['stars']
+    if label <= 2:
         example['label'] = 0
-    elif label == 2:
-        example['label'] = 1
-    elif label == 4:
+    elif label >= 4:
         example['label'] = 2
+    else:
+        example['label'] = 1
+    example['text'] = example['review_body']
     return example
 
 def relabel_nli(example):
@@ -48,7 +49,7 @@ def relabel_nli(example):
 def load_datas(pattern_dir, task):
     logger.info(f'Loading data...')
     if task in ['SA', 'SA_train']:
-        dataset = load_dataset('sentiment140', split='train')
+        dataset = load_dataset('amazon_reviews_multi', 'en', split='train')
         dataset = dataset.shuffle(seed=42).select(range(50000))
         dataset = dataset.map(relabel_sa, batched=False)
     elif task in ['NLI', 'NLI_train']:
