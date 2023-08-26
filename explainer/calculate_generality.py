@@ -269,7 +269,10 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_
             example.f1_diff = example.example_f1_ood - corpus_f1
             example.example_preds_ood = example_preds
         else:
-            example.iid_acc = num_same_gold / num_same
+            try:
+                example.iid_acc = num_same_gold / num_same
+            except ZeroDivisionError:
+                example.iid_acc = 0
             example.example_preds_iid = example_preds
             
 def model_performance(model, tokenizer, dataset, task):
