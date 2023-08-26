@@ -235,37 +235,41 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_
             
         if not e_idx:
             continue
-        origin_pred = example.origin_pred
-        num_same = 0
         
         # Truncate examples to 2500 if the number of examples is too large
-        if len(e_idx) >= 2500:
-            examples = dataset.select(e_idx[:2500])
+        if len(e_idx) >= 1000:
+            examples = dataset.select(e_idx[:1000])
             example.isTruncated = True
         else:
             examples = dataset.select(e_idx)
             
-        dataloader = DataLoader(examples, batch_size=32)
+        dataloader = DataLoader(examples, batch_size=64)
         
         # Predict answer for each example
         example_preds = []
         scores = []
+        l = example.masked_pred
+        num_same = 0
+        num_same_gold = 0
         with torch.inference_mode():
             for batch in tqdm(dataloader, desc=f'Predicting example label({len(e_idx)})', leave=False):
                 labels = batch.pop('labels').numpy()
                 batch = {k: v.to(model.device) for k, v in batch.items()}
-                pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
-                num_same += (pred == origin_pred).sum().item()
-                scores.append(f1_score(labels, pred, average='macro'))
-                example_preds.extend(pred.tolist())
+                preds = model(**batch).logits.detach().cpu().numpy().argmax(-1)
+                num_same += (preds == l).sum().item()
+                for p, y in zip(preds, labels):
+                    if p == l and l == y:
+                        num_same_gold += 1
+                scores.append(f1_score(labels, preds, average='macro'))
+                example_preds.extend(preds.tolist())
+                
         if not iid:
             example.generality = num_same / len(examples)
             example.example_f1_ood = np.mean(scores)
             example.f1_diff = example.example_f1_ood - corpus_f1
             example.example_preds_ood = example_preds
         else:
-            example.iid_acc = num_same / len(examples)
-            example.example_f1_iid = np.mean(scores)
+            example.iid_acc = num_same_gold / num_same
             example.example_preds_iid = example_preds
             
 def model_performance(model, tokenizer, dataset, task):
@@ -276,7 +280,7 @@ def model_performance(model, tokenizer, dataset, task):
         
     dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
     dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels']) # Roberta doesn't need token_type_ids
-    dataLoader = DataLoader(dataset, batch_size=32)
+    dataLoader = DataLoader(dataset, batch_size=64)
     with torch.inference_mode():
         scores = []
         for batch in tqdm(dataLoader, desc='Evaluating model performance'):
@@ -297,7 +301,10 @@ def main(args):
     aggr_examples = get_examples(ood, masked_patern, tokenizer, args.task)
     get_examples_iid(aggr_examples, iid, tokenizer, args.task)
     
-    score = model_performance(model, tokenizer, ood, args.task)
+    if args.task in ['SA', 'SA_train']:
+        score = 0.6031362044316497 # model_performance(model, tokenizer, ood, args.task)
+    elif args.task in ['NLI', 'NLI_train']:
+        score = 0.7784632106790529
     logger.info(f'Corpus F1: {score}')
     
     # Calculate generality
