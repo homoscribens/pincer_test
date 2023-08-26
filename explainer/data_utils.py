@@ -15,10 +15,13 @@ class MaskedPattern:
 @dataclass
 class Examples(MaskedPattern):
     keywords: list
-    examples_idx: list
+    examples_idx_ood: list
+    examples_idx_iid: list = None
     isTruncated: bool = False
-    example_preds: list = None
-    example_f1: float = None
+    example_preds_iid: list = None
+    example_preds_ood: list = None
+    example_f1_iid: float = None
+    example_f1_ood: float = None
     f1_diff: float = None
     generality: float = None
-    
+    iid_acc: float = None

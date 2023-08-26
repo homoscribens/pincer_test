@@ -49,14 +49,26 @@ def relabel_nli(example):
 def load_datas(pattern_dir, task):
     logger.info(f'Loading data...')
     if task in ['SA', 'SA_train']:
-        dataset = load_dataset('amazon_reviews_multi', 'en', split='train')
-        dataset = dataset.shuffle(seed=42).select(range(50000))
-        dataset = dataset.map(relabel_sa, batched=False)
+        ood = load_dataset('amazon_reviews_multi', 'en', split='train')
+        ood = ood.shuffle(seed=42).select(range(50000))
+        ood = ood.map(relabel_sa, batched=False)
+        if task == 'SA':
+            iid = load_dataset('tweet_eval', 'sentiment', split='test')
+        elif task == 'SA_train':
+            iid = load_dataset('tweet_eval', 'sentiment', split='train')
     elif task in ['NLI', 'NLI_train']:
-        dataset = load_dataset('anli', split='train_r3')
-        dataset = dataset.map(relabel_nli, batched=False)
+        ood = load_dataset('anli', split='train_r3')
+        ood = ood.map(relabel_nli, batched=False)
+        if task == 'NLI':
+            iid = load_dataset('glue', 'mnli', split='validation_matched')
+            iid = iid.map(relabel_nli, batched=False)
+        elif task == 'NLI_train':
+            iid = load_dataset('glue', 'mnli', split='train')
+            iid = iid.shuffle(seed=42).select(range(50000))
+            iid = iid.map(relabel_nli, batched=False)
+        
     masked_pattern = pickle.load(open(pattern_dir / 'masked_pattern.pkl', 'rb'))
-    return dataset, masked_pattern
+    return ood, iid, masked_pattern
 
 def remove_stopwords(text):
     stopwords = string.punctuation
@@ -96,11 +108,13 @@ def get_examples(dataset, masked_patern, tokenizer, task):
             for i, text in enumerate(tokenized_texts):
                 if set(key_words).issubset(text):
                     example_indicies.append(i)
-                    
-            aggr_examples.append(Examples(**vars(pattern), 
-                                          keywords=key_words,
-                                          examples_idx=example_indicies)) 
-        
+            
+            aggr_examples.append(Examples(
+                **vars(pattern), 
+                keywords=key_words,
+                examples_idx_ood=example_indicies
+                ))
+    
     elif task in ['NLI', 'NLI_train']:
         
         def tokenize(example):
@@ -138,11 +152,65 @@ def get_examples(dataset, masked_patern, tokenizer, task):
                     
             aggr_examples.append(Examples(**vars(pattern),
                                           keywords=keywords_premise + ['<SEP>'] + keywords_hypothesis, 
-                                          examples_idx=example_indicies)) 
+                                          examples_idx_ood=example_indicies)) 
+    
+    else:
+        raise ValueError(f'Invalid task: {task}')
     
     return aggr_examples
+    
+def get_examples_iid(examples, dataset, tokenizer, task):
+    logger.info(f'Creating corpus...')
+    
+    if task in ['SA', 'SA_train']:
+        
+        def tokenize(example):
+            tokenized = tokenizer.tokenize(example['text'])
+            tokenized = [token.replace('Ġ', '') for token in tokenized if not token == 'Ġ']
+            example['tokenized'] = tokenized
+            return example
+        
+        logger.info('Tokenizing dataset...')
+        tokenized_texts = dataset.map(tokenize, batched=False)['tokenized']
+        tokenized_texts = list(map(set, tokenized_texts))
+        
+        for e in tqdm(examples, desc='Collecting iid examples'):
+            example_indicies = []
+            for i, text in enumerate(tokenized_texts):
+                if set(e.keywords).issubset(text):
+                    example_indicies.append(i)
+            e.examples_idx_iid = example_indicies
+    
+    elif task in ['NLI', 'NLI_train']:
+        
+        def tokenize(example):
+            tokenized_premise = tokenizer.tokenize(example['premise'])
+            tokenized_hypothesis = tokenizer.tokenize(example['hypothesis'])
+            tokenized_premise = [token.replace('Ġ', '') for token in tokenized_premise if not token == 'Ġ']
+            tokenized_hypothesis = [token.replace('Ġ', '') for token in tokenized_hypothesis if not token == 'Ġ']
+            example['tokenized_premise'] = tokenized_premise
+            example['tokenized_hypothesis'] = tokenized_hypothesis
+            return example
+        
+        logger.info('Tokenizing dataset...')
+        tokenized_premise = dataset.map(tokenize, batched=False)['tokenized_premise']
+        tokenized_hypothesis = dataset.map(tokenize, batched=False)['tokenized_hypothesis']
+        tokenized_premise = list(map(set, tokenized_premise))
+        tokenized_hypothesis = list(map(set, tokenized_hypothesis))
+        
+        for e in tqdm(examples, desc='Collecting iid examples'):
+            example_indicies = []
+            keywords_premise = e.keywords[:e.keywords.index('<SEP>')]
+            keywords_hypothesis = e.keywords[e.keywords.index('<SEP>')+1:]
+            for i, (prem, hypo) in enumerate(zip(tokenized_premise, tokenized_hypothesis)):
+                if set(keywords_hypothesis).issubset(hypo) and set(keywords_premise).issubset(prem):
+                    example_indicies.append(i)
+            e.examples_idx_iid = example_indicies
+    
+    else:
+        raise ValueError(f'Invalid task: {task}')
 
-def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_f1):
+def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_f1, iid:bool = False):
     logger.info('########### Calculating pattern generality ###########')
     logger.info(f'Number of available pattern: {len(aggr_examples)}')
     logger.info(f'Number of corpus: {len(dataset)}')
@@ -158,19 +226,24 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_
     dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True)
     dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels']) # Roberta doesn't need token_type_ids
     
-    for example in tqdm(aggr_examples, desc='Calculating generality'):
+    for example in tqdm(aggr_examples, desc=f'Calculating generality (iid={iid})'):
         # Skip if there is no example
-        if not example.examples_idx:
+        if not iid:
+            e_idx = example.examples_idx_ood
+        else:
+            e_idx = example.examples_idx_iid
+            
+        if not e_idx:
             continue
         origin_pred = example.origin_pred
         num_same = 0
         
         # Truncate examples to 2500 if the number of examples is too large
-        if len(example.examples_idx) >= 2500:
-            examples = dataset.select(example.examples_idx[:2500])
+        if len(e_idx) >= 2500:
+            examples = dataset.select(e_idx[:2500])
             example.isTruncated = True
         else:
-            examples = dataset.select(example.examples_idx)
+            examples = dataset.select(e_idx)
             
         dataloader = DataLoader(examples, batch_size=32)
         
@@ -178,18 +251,22 @@ def calculate_generality(aggr_examples, model, tokenizer, dataset, task, corpus_
         example_preds = []
         scores = []
         with torch.inference_mode():
-            for batch in tqdm(dataloader, desc=f'Predicting example label({len(example.examples_idx)})', leave=False):
+            for batch in tqdm(dataloader, desc=f'Predicting example label({len(e_idx)})', leave=False):
                 labels = batch.pop('labels').numpy()
                 batch = {k: v.to(model.device) for k, v in batch.items()}
                 pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
                 num_same += (pred == origin_pred).sum().item()
                 scores.append(f1_score(labels, pred, average='macro'))
                 example_preds.extend(pred.tolist())
-                
-        example.generality = num_same / len(examples)
-        example.example_f1 = np.mean(scores)
-        example.f1_diff = example.example_f1 - corpus_f1
-        example.example_preds = example_preds
+        if not iid:
+            example.generality = num_same / len(examples)
+            example.example_f1_ood = np.mean(scores)
+            example.f1_diff = example.example_f1_ood - corpus_f1
+            example.example_preds_ood = example_preds
+        else:
+            example.iid_acc = num_same / len(examples)
+            example.example_f1_iid = np.mean(scores)
+            example.example_preds_iid = example_preds
             
 def model_performance(model, tokenizer, dataset, task):
     if task in ['SA', 'SA_train']:
@@ -207,23 +284,25 @@ def model_performance(model, tokenizer, dataset, task):
             batch = {k: v.to(model.device) for k, v in batch.items()}
             pred = model(**batch).logits.detach().cpu().numpy().argmax(-1)
             scores.append(f1_score(labels, pred, average='macro'))
-    return np.mean(scores)  
+    return np.mean(scores)
 
 def main(args):
     # Setup
-    dataset, masked_patern = load_datas(args.pattern_dir, args.task)
+    ood, iid, masked_patern = load_datas(args.pattern_dir, args.task)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     model = AutoModelForSequenceClassification.from_pretrained(args.model_name)
     model.to(args.device)
     
     # Create corpus that contains tokens in each pattern
-    aggr_examples = get_examples(dataset, masked_patern, tokenizer, args.task)
+    aggr_examples = get_examples(ood, masked_patern, tokenizer, args.task)
+    get_examples_iid(aggr_examples, iid, tokenizer, args.task)
     
-    score = model_performance(model, tokenizer, dataset, args.task)
+    score = model_performance(model, tokenizer, ood, args.task)
     logger.info(f'Corpus F1: {score}')
     
     # Calculate generality
-    calculate_generality(aggr_examples, model, tokenizer, dataset, args.task, score)
+    calculate_generality(aggr_examples, model, tokenizer, ood, args.task, score)
+    calculate_generality(aggr_examples, model, tokenizer, iid, args.task, score, iid=True)
 
     # Save
     logger.info(f'Saving to {args.output_dir}')

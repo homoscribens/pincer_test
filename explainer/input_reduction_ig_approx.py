@@ -15,7 +15,7 @@ import torch
 from models.model import BertClassifier
 
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from transformers_interpret import SequenceClassificationExplainer
+from transformers_interpret import SequenceClassificationExplainer, PairwiseSequenceClassificationExplainer
 
 from tqdm import tqdm
 
@@ -34,22 +34,19 @@ def relabel(example):
         example['label'] = 0
     return example
     
-def load_data(data_dir, IF, task, data_size=1000):
-    if IF:
-        dataset = load_from_disk(data_dir / 'reduced_train')
-    else:
-        if task == 'SA':
-            dataset = load_dataset('tweet_eval', 'sentiment', split='test')
-        elif task == 'SA_train':
-            dataset = load_dataset('tweet_eval', 'sentiment', split='train')
-        elif task == 'NLI':
-            dataset = load_dataset('glue', 'mnli', split='validation_matched')
-            dataset = dataset.map(relabel, batched=False)
-        elif task == 'NLI_train':
-            dataset = load_dataset('glue', 'mnli', split='train')
-            dataset = dataset.map(relabel, batched=False)
-            
-        dataset = dataset.shuffle(seed=42).select(range(data_size))
+def load_data(task, data_size=1000):
+    if task == 'SA':
+        dataset = load_dataset('tweet_eval', 'sentiment', split='test')
+    elif task == 'SA_train':
+        dataset = load_dataset('tweet_eval', 'sentiment', split='train')
+    elif task == 'NLI':
+        dataset = load_dataset('glue', 'mnli', split='validation_matched')
+        dataset = dataset.map(relabel, batched=False)
+    elif task == 'NLI_train':
+        dataset = load_dataset('glue', 'mnli', split='train')
+        dataset = dataset.map(relabel, batched=False)
+        
+    dataset = dataset.shuffle(seed=42).select(range(data_size))
     return dataset
 
 def load_model(model_path, device='cuda'):
@@ -63,11 +60,11 @@ def clean_text(text):
         text = re.sub('\s{2,}', ' ', text)
         return text
     
-def preprocess(dataset, tokenizer, task):
+def preprocess(dataset, task):
     if task in ['SA', 'SA_train']:
         dataset = dataset.map(lambda x: {'text': clean_text(x['text'])})
     elif task in ['NLI', 'NLI_train']:
-        dataset = dataset.map(lambda x: {'text': clean_text(x['premise']) + f' {tokenizer.sep_token} '  + clean_text(x['hypothesis'])})
+        dataset = dataset.map(lambda x: {'preimse': clean_text(x['premise']), 'hypothesis': clean_text(x['hypothesis'])})
         
     return dataset
 
@@ -75,7 +72,12 @@ def get_index(l, default=False):
     return l.index('Ġ') if 'Ġ' in l else default
 
 def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
-    word_attributions = cls_explainer(sentence)
+    if cls_explainer.__class__.__name__.startswith('Sequence'):
+        word_attributions = cls_explainer(sentence)
+    elif cls_explainer.__class__.__name__.startswith('Pairwise'):
+        word_attributions = cls_explainer(sentence[0], sentence[1])
+    else:
+        raise ValueError(f'Invalid explainer: {cls_explainer.__class__.__name__}')
 
     erased = []
     mod_input_ids = encoded['input_ids'][0].clone()
@@ -106,14 +108,22 @@ def create_erased_inputs(encoded, sentence, cls_explainer, tokenizer):
     return torch.stack(erased[:-1])
 
 def enumerate_hypothesis(dataset, cls_explainer, model, tokenizer, task, device='cuda'):
-    dataset = preprocess(dataset, tokenizer, task=task)
+    dataset = preprocess(dataset, task=task)
     
     none = 0
     aggr_predictions = []
     for data in tqdm(dataset, desc='Masking'):
-        sentence = data['text']
-        encoded = tokenizer(sentence, return_tensors='pt')
-        encoded = {k: v.to(device) for k, v in encoded.items()}
+        if cls_explainer.__class__.__name__.startswith('Sequence'):
+            sentence = data['text']
+            encoded = tokenizer(sentence, return_tensors='pt')
+            encoded = {k: v.to(device) for k, v in encoded.items()}
+        elif cls_explainer.__class__.__name__.startswith('Pair'):
+            premise, hypothesis = data['premise'], data['hypothesis']
+            sentence = [premise, hypothesis]
+            encoded = tokenizer(premise, hypothesis, return_tensors='pt')
+            encoded = {k: v.to(device) for k, v in encoded.items()}
+        else:
+            raise ValueError(f'Invalid explainer: {cls_explainer.__class__.__name__}')
         
         gold_label = data['label']
         
@@ -135,14 +145,15 @@ def enumerate_hypothesis(dataset, cls_explainer, model, tokenizer, task, device=
         for logit, masked_sentence, masked_sentence_seq in zip(output.logits, erased_inputs, tokenizer.batch_decode(erased_inputs)):
             logit = logit.detach().cpu().softmax(dim=0).numpy()
             
-            predictions.append(MaskedPattern(masked_sentence=masked_sentence_seq,
-                                            masked_len= len([token for token in masked_sentence if token == tokenizer.mask_token_id]),
-                                            correct=origin_logits.argmax() == logit.argmax(),
-                                            score_diff=origin_logits.max() - logit.max(),
-                                            origin_pred=origin_logits.argmax().item(),
-                                            masked_pred=logit.argmax(0).item(),
-                                            gold_label=gold_label,
-                                            ))
+            predictions.append(MaskedPattern(
+                masked_sentence=masked_sentence_seq,
+                masked_len=len([token for token in masked_sentence if token == tokenizer.mask_token_id]),
+                correct=origin_logits.argmax() == logit.argmax(),
+                score_diff=origin_logits.max() - logit.max(),
+                origin_pred=origin_logits.argmax().item(),
+                masked_pred=logit.argmax(0).item(),
+                gold_label=gold_label,
+                ))
             
         predictions.sort(key=lambda x: (-int(x.correct), -x.masked_len, -x.score_diff))
         
@@ -160,30 +171,23 @@ def main(args):
     model = model.to(args.device)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
 
-    cls_explainer = SequenceClassificationExplainer(
-        model,
-        tokenizer)
-    
-    pattern_data = load_data(args.data_dir, args.IF, args.task, args.data_size)
-    if args.IF:
-        inf_file_list = list(args.if_dir.glob('influence_test_idx_*.pkl'))
-
-        masked_inf = []
-        for file in inf_file_list:
-            with file.open('rb') as f:
-                inf = pickle.load(f)
-            topk_idx = np.flip(np.argsort(inf))[:args.topk]
-            topk = [pattern_data[i] for i in topk_idx]
-
-            for i, s in enumerate(topk):
-                masked = enumerate_hypothesis(s, cls_explainer, model, tokenizer)
-                masked_inf.append(masked)
+    if args.task in ['SA', 'SA_train']:
+        cls_explainer = SequenceClassificationExplainer(
+            model,
+            tokenizer)
+    elif args.task in ['NLI', 'NLI_train']:
+        cls_explainer = PairwiseSequenceClassificationExplainer(
+            model,
+            tokenizer)
     else:
-        logger.info('Iterating reductive maksing...')
-        masked_pattern = enumerate_hypothesis(pattern_data, cls_explainer, model, tokenizer, args.task, device=args.device)
-        logger.info(f'Saving to {args.output_dir}')
-        with open(args.output_dir / 'masked_pattern.pkl', 'wb') as f:
-            pickle.dump(masked_pattern, f)
+        raise ValueError(f'Invalid task: {args.task}')
+    
+    pattern_data = load_data(args.task, args.data_size)
+    logger.info('Iterating reductive maksing...')
+    masked_pattern = enumerate_hypothesis(pattern_data, cls_explainer, model, tokenizer, args.task, device=args.device)
+    logger.info(f'Saving to {args.output_dir}')
+    with open(args.output_dir / 'masked_pattern.pkl', 'wb') as f:
+        pickle.dump(masked_pattern, f)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
