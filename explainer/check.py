@@ -116,7 +116,7 @@ def generality_vs_f1_diff(fig_dir, examples):
 def create_dataframes(examples):
     df_list = []
     for e in examples:
-        if e.generality is not None:
+        if e.generality is not None and e.correct:
             
             df_list.append({
                 'keywords': [kw.replace('Ġ', '') for kw in e.keywords],
@@ -129,7 +129,6 @@ def create_dataframes(examples):
                 'truncate': e.isTruncated,
                 'example_f1': e.example_f1_ood,
                 'f1_diff': e.f1_diff,
-                'example_f1_iid': e.example_f1_iid,
                 'iid_acc': e.iid_acc,
                 })
             
