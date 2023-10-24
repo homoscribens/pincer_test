@@ -304,10 +304,7 @@ def main(args):
     aggr_examples = get_examples(ood, masked_patern, tokenizer, args.task)
     get_examples_iid(aggr_examples, iid, tokenizer, args.task)
     
-    if args.task in ['SA', 'SA_train']:
-        score = 0.6031362044316497 # model_performance(model, tokenizer, ood, args.task)
-    elif args.task in ['NLI', 'NLI_train']:
-        score = 0.7784632106790529
+    score = model_performance(model, tokenizer, ood, args.task)
     logger.info(f'Corpus F1: {score}')
     
     # Calculate generality
